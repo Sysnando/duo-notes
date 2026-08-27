@@ -42,7 +42,7 @@ reads and writes normally; a third account is refused.
 ### Adding or changing who has access
 
 Connect with the pooler connection string (the database password is in
-`~/.duo-notes/db-password.txt` on Felipe's Mac, and in the Supabase dashboard
+`~/.duo-notes/db-password.txt` on the owner's Mac, and in the Supabase dashboard
 under Settings → Database):
 
 ```bash
