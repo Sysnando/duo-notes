@@ -4,6 +4,10 @@
 
   const App = (window.App = window.App || {});
   const STORAGE_KEY = 'duo-notes.cache.v1';
+  // Which sidebar branches are folded shut. Deliberately per-person and outside
+  // the synced document: one of us collapsing a branch shouldn't fold it for the
+  // other, the same reasoning as the canvas camera.
+  const TREE_KEY = 'duo-notes.tree.v1';
 
   const state = (App.state = {
     pages: {},          // id -> { id, parentId, title, blocks, sortOrder, updatedAt }
@@ -78,7 +82,11 @@
       : `Delete “${label}”?`;
     if (!confirm(msg)) return;
     const ids = [pageId, ...kids];
-    for (const id of ids) delete state.pages[id];
+    for (const id of ids) {
+      delete state.pages[id];
+      collapsed.delete(id);
+    }
+    saveCollapsed();
     if (ids.includes(state.currentPageId)) App.openPage(firstPageId());
     App.saveLocal();
     App.Sync.pushDelete(ids);
@@ -97,8 +105,51 @@
   }
   App.childrenOf = childrenOf;
 
+  const hasChildren = (pageId) => Object.values(state.pages).some((p) => p.parentId === pageId);
+
+  // ---------- sidebar fold state ----------
+
+  let collapsed = new Set();
+
+  function loadCollapsed() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(TREE_KEY) || 'null');
+      if (Array.isArray(saved)) collapsed = new Set(saved);
+    } catch (err) { /* start expanded */ }
+  }
+
+  function saveCollapsed() {
+    try {
+      localStorage.setItem(TREE_KEY, JSON.stringify([...collapsed]));
+    } catch (err) { /* quota */ }
+  }
+
+  App.isCollapsed = (pageId) => collapsed.has(pageId);
+
+  App.toggleCollapse = function (pageId) {
+    if (collapsed.has(pageId)) collapsed.delete(pageId);
+    else collapsed.add(pageId);
+    saveCollapsed();
+    renderTree();
+  };
+
+  // Opening a page has to reveal it, so unfold every branch above it.
+  function expandAncestors(pageId) {
+    let page = state.pages[pageId];
+    let changed = false;
+    const guard = new Set();
+    while (page && page.parentId && !guard.has(page.id)) {
+      guard.add(page.id);
+      if (collapsed.delete(page.parentId)) changed = true;
+      page = state.pages[page.parentId];
+    }
+    if (changed) saveCollapsed();
+  }
+  App.expandAncestors = expandAncestors;
+
   App.openPage = function (pageId) {
     state.currentPageId = pageId && state.pages[pageId] ? pageId : null;
+    if (state.currentPageId) expandAncestors(state.currentPageId);
     const hash = state.currentPageId ? '#' + state.currentPageId : '';
     if (location.hash !== hash) history.replaceState(null, '', hash || location.pathname);
     App.saveLocal();
@@ -164,10 +215,29 @@
         row.style.setProperty('--depth', depth);
         row.dataset.pageId = page.id;
 
+        const kids = hasChildren(page.id);
+        const isCollapsed = collapsed.has(page.id);
+
+        // Pages without sub-pages get an invisible spacer so titles stay aligned.
+        const toggle = document.createElement('button');
+        toggle.className = 'tree-toggle' + (kids ? (isCollapsed ? '' : ' open') : ' spacer');
+        toggle.textContent = kids ? '▸' : '';
+        if (kids) {
+          toggle.title = isCollapsed ? 'Show sub-pages' : 'Hide sub-pages';
+          toggle.setAttribute('aria-expanded', String(!isCollapsed));
+          toggle.setAttribute('aria-label', `${isCollapsed ? 'Expand' : 'Collapse'} ${page.title || 'Untitled'}`);
+          toggle.addEventListener('click', (e) => { e.stopPropagation(); App.toggleCollapse(page.id); });
+        } else {
+          toggle.tabIndex = -1;
+          toggle.setAttribute('aria-hidden', 'true');
+        }
+
         const name = document.createElement('button');
         name.className = 'tree-name';
         name.textContent = page.title || 'Untitled';
         name.addEventListener('click', () => App.openPage(page.id));
+        // Double-clicking the row itself is a quick way to fold a branch.
+        if (kids) name.addEventListener('dblclick', () => App.toggleCollapse(page.id));
 
         const add = document.createElement('button');
         add.className = 'tree-action';
@@ -181,9 +251,11 @@
         del.title = 'Delete page';
         del.addEventListener('click', (e) => { e.stopPropagation(); App.deletePage(page.id); });
 
-        row.append(name, add, del);
+        add.title = kids && isCollapsed ? 'Add sub-page (will expand)' : 'Add sub-page';
+
+        row.append(toggle, name, add, del);
         nav.appendChild(row);
-        build(page.id, depth + 1);
+        if (!isCollapsed) build(page.id, depth + 1);
       }
     };
     build(null, 0);
@@ -250,6 +322,7 @@
     const id = location.hash.slice(1);
     if (id && state.pages[id]) state.currentPageId = id;
     if (!state.currentPageId || !state.pages[state.currentPageId]) state.currentPageId = firstPageId();
+    if (state.currentPageId) expandAncestors(state.currentPageId);
     App.render();
   };
 
@@ -260,6 +333,7 @@
 
   function init() {
     loadLocal();
+    loadCollapsed();
     wireShell();
     wireTitle();
     App.Editor.init();

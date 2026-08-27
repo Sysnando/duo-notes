@@ -66,6 +66,14 @@ Everything committed ships as-is, including `config.js`.
 - `app.js` — state (`{pages, currentPageId}`), localStorage cache
   (`duo-notes.cache.v1`), the `persistAndRender()` funnel every mutation goes
   through, sidebar tree, hash routing, boot.
+
+  Sidebar branches fold. A page with sub-pages gets a disclosure triangle
+  (double-clicking its name works too), and which branches are shut is kept per
+  person in `duo-notes.tree.v1`, outside the synced document — otherwise one of
+  you folding a branch would fold it for the other. Opening a page unfolds
+  whatever is above it, and adding a sub-page to a folded parent opens that
+  parent so the new page is visible. Folding a branch you are currently reading
+  inside is allowed: the branch closes, the page stays open.
 - `editor.js` — block editor: one contenteditable per text block, Enter
   splits / Backspace merges, arrow-key navigation, "/" slash menu,
   Alt+Arrow and drag-handle reorder, plain-text paste.

@@ -158,13 +158,31 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   display: flex;
   align-items: center;
   border-radius: 7px;
-  padding-left: calc(0.5rem + var(--depth, 0) * 1rem);
+  padding-left: calc(0.35rem + var(--depth, 0) * 0.85rem);
   color: var(--ink-soft);
 }
 
 .tree-row:hover { background: rgba(192, 91, 60, 0.07); }
 .tree-row.active { background: var(--accent-soft); color: var(--ink); }
 .tree-row.active .tree-name { font-weight: 600; }
+
+.tree-toggle {
+  flex: none;
+  width: 1.1rem;
+  height: 1.35rem;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  transition: transform 0.14s ease, color 0.14s ease;
+}
+
+.tree-toggle:hover { color: var(--accent); background: rgba(43, 38, 32, 0.07); }
+.tree-toggle.open { transform: rotate(90deg); }
+.tree-toggle.spacer { pointer-events: none; }
+.tree-row.active .tree-toggle { color: var(--ink-soft); }
 
 .tree-name {
   flex: 1;
