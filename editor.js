@@ -13,7 +13,8 @@
     { key: 'bullet',    label: 'Bulleted list', hint: 'Simple bullet point',             aliases: 'list ul point' },
     { key: 'todo',      label: 'To-do list',    hint: 'Task with a checkbox',            aliases: 'todo task checkbox check' },
     { key: 'divider',   label: 'Divider',       hint: 'Horizontal rule',                 aliases: 'rule line hr separator' },
-    { key: 'table',     label: 'Table',         hint: 'Mini database with typed columns', aliases: 'database grid db' }
+    { key: 'table',     label: 'Table',         hint: 'Mini database with typed columns', aliases: 'database grid db' },
+    { key: 'canvas',    label: 'Drawing',       hint: 'Freehand, shapes, arrows and icons', aliases: 'draw canvas sketch diagram whiteboard excalidraw' }
   ];
 
   // "/todo" should find "To-do list", so match on letters and digits only.
@@ -156,6 +157,8 @@
       });
     } else if (block.type === 'table') {
       body.appendChild(App.Table.render(block, page));
+    } else if (block.type === 'canvas') {
+      body.appendChild(App.Canvas.render(block, page));
     } else {
       if (block.type === 'todo') {
         const check = document.createElement('input');
@@ -411,7 +414,7 @@
     fresh.id = page.blocks[idx].id; // keep identity so caret restore stays sane
     page.blocks[idx] = fresh;
 
-    if (key === 'divider' || key === 'table') {
+    if (key === 'divider' || key === 'table' || key === 'canvas') {
       // Non-text blocks: give the caret somewhere to land after insertion.
       const next = page.blocks[idx + 1];
       if (!next || !App.isTextBlock(next)) {

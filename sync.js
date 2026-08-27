@@ -99,6 +99,58 @@
 
   // ---------- pull / reconcile ----------
 
+  // Take the server's copy of a page. When we still owe a push, canvas elements
+  // are unioned by id rather than overwritten, so two people drawing on the same
+  // canvas don't erase each other.
+  function adoptRow(row) {
+    const remotePage = fromRow(row);
+    const local = App.state.pages[row.id];
+    if (local && Sync.dirty.has(row.id) && App.Canvas && App.Canvas.mergeCanvasBlocks) {
+      App.Canvas.mergeCanvasBlocks(local, remotePage);
+    }
+    App.state.pages[row.id] = remotePage;
+  }
+
+  // We're keeping our newer copy of the page, but anything drawn on a canvas that
+  // only the server knows about should still survive.
+  function foldCanvasOnly(row) {
+    const local = App.state.pages[row.id];
+    if (!local || !App.Canvas || !App.Canvas.foldRemoteElements) return;
+    if (App.Canvas.foldRemoteElements(local, fromRow(row))) {
+      App.saveLocal();
+      App.Canvas.refreshAll();
+    }
+  }
+
+  const deferredRows = new Map();
+
+  function applyRemoteRow(row) {
+    // Never yank the DOM out from under an in-progress drawing gesture.
+    if (App.Canvas && App.Canvas.isBusy()) {
+      deferredRows.set(row.id, row);
+      return;
+    }
+    Sync.applyingRemote = true;
+    adoptRow(row);
+    Sync.applyingRemote = false;
+    if (App.state.currentPageId && !App.state.pages[App.state.currentPageId]) {
+      App.state.currentPageId = null;
+    }
+    App.saveLocal();
+    App.render();
+    if (App.Canvas) App.Canvas.refreshAll();
+  }
+
+  // Called by the canvas as soon as a gesture finishes. This runs before the
+  // debounced push fires, so remote work is merged in before we upload.
+  Sync.flushDeferred = function () {
+    if (!deferredRows.size) return;
+    if (App.Canvas && App.Canvas.isBusy()) return;
+    const rows = [...deferredRows.values()];
+    deferredRows.clear();
+    for (const row of rows) applyRemoteRow(row);
+  };
+
   async function refetchAll() {
     const { data, error } = await client.from('pages').select('*');
     if (error) {
@@ -112,7 +164,8 @@
       remoteIds.add(row.id);
       const local = App.state.pages[row.id];
       const localWins = local && Sync.dirty.has(row.id) && local.updatedAt > row.updated_at;
-      if (!localWins) App.state.pages[row.id] = fromRow(row);
+      if (localWins) foldCanvasOnly(row);
+      else adoptRow(row);
     }
     // Local pages missing remotely: deleted elsewhere unless we still owe a push.
     for (const id of Object.keys(App.state.pages)) {
@@ -124,6 +177,7 @@
     }
     App.saveLocal();
     App.render();
+    if (App.Canvas) App.Canvas.refreshAll();
     setStatus('online', 'Synced');
     await flushPending();
     return true;
@@ -132,11 +186,7 @@
   async function fetchOne(pageId) {
     const { data } = await client.from('pages').select('*').eq('id', pageId).maybeSingle();
     if (!data) return;
-    Sync.applyingRemote = true;
-    App.state.pages[data.id] = fromRow(data);
-    Sync.applyingRemote = false;
-    App.saveLocal();
-    App.render();
+    applyRemoteRow(data);
   }
 
   // ---------- realtime ----------
@@ -169,15 +219,52 @@
     const row = payload.new;
     if (!row || row.client_id === clientId) return; // self-echo
     if (row.blocks === undefined || row.blocks === null) { fetchOne(row.id); return; } // oversized payload
-    const local = App.state.pages[row.id];
-    if (local && local.updatedAt && row.updated_at <= local.updatedAt) return; // stale
 
-    Sync.applyingRemote = true;
-    App.state.pages[row.id] = fromRow(row);
-    Sync.applyingRemote = false;
-    App.saveLocal();
-    App.render();
+    const local = App.state.pages[row.id];
+    const stale = local && local.updatedAt && row.updated_at <= local.updatedAt;
+    if (stale) {
+      // Our copy is newer, so it wins — but don't discard canvas work that only
+      // exists on their side.
+      if (Sync.dirty.has(row.id)) foldCanvasOnly(row);
+      return;
+    }
+    applyRemoteRow(row);
   }
+
+  // ---------- canvas live cursors ----------
+
+  // Ephemeral broadcast channel: cursor positions and in-progress strokes never
+  // touch the database, so they cost no writes and cause no write conflicts.
+  Sync.canvasChannel = function (blockId, handlers) {
+    if (!enabled || !client || !user) return null;
+    const channel = client.channel('canvas:' + blockId, {
+      config: { broadcast: { self: false } }
+    });
+    channel.on('broadcast', { event: 'cursor' }, (message) => {
+      if (handlers.onCursor) handlers.onCursor(message && message.payload);
+    });
+    channel.on('broadcast', { event: 'leave' }, (message) => {
+      const payload = message && message.payload;
+      if (handlers.onLeave && payload) handlers.onLeave(payload.clientId);
+    });
+    channel.subscribe();
+
+    return {
+      send(payload) {
+        channel.send({
+          type: 'broadcast',
+          event: 'cursor',
+          payload: Object.assign({ clientId, name: user ? user.email : '' }, payload)
+        });
+      },
+      close() {
+        try {
+          channel.send({ type: 'broadcast', event: 'leave', payload: { clientId } });
+        } catch (err) { /* channel already gone */ }
+        client.removeChannel(channel);
+      }
+    };
+  };
 
   // ---------- presence ----------
 

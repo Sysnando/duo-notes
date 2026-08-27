@@ -24,6 +24,7 @@
       case 'todo':     return { id, type: 'todo', text: '', checked: false };
       case 'divider':  return { id, type: 'divider' };
       case 'table':    return App.Table.makeBlock(id);
+      case 'canvas':   return App.Canvas.makeBlock(id);
       default:         return { id, type: 'paragraph', text: '' };
     }
   };
