@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Duo Notes</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128213;</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Login -->
+  <section id="login" class="login hidden">
+    <div class="login-card">
+      <h1 class="login-title">Duo Notes</h1>
+      <p class="login-sub">A notebook for two.</p>
+      <form id="login-form">
+        <label>Email
+          <input type="email" id="login-email" autocomplete="username" required>
+        </label>
+        <label>Password
+          <input type="password" id="login-password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" id="login-btn">Sign in</button>
+        <p id="login-error" class="login-error" hidden></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- App shell -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <header class="sidebar-head">
+        <span class="brand">Duo&nbsp;Notes</span>
+        <button id="new-page-btn" class="icon-btn" title="New page">＋</button>
+      </header>
+      <nav id="page-tree" class="page-tree" aria-label="Pages"></nav>
+      <footer class="sidebar-foot">
+        <span id="sync-status" class="sync-status" title=""></span>
+        <span id="user-email" class="user-email"></span>
+        <button id="signout-btn" class="linklike" hidden>Sign out</button>
+      </footer>
+    </aside>
+
+    <main class="main">
+      <div id="offline-banner" class="banner" hidden>Can’t reach the server. Working offline from the local copy; changes will sync when the connection returns.</div>
+      <div id="presence-hint" class="presence" hidden></div>
+      <article id="page-view" class="page-view">
+        <h1 id="page-title" class="page-title" contenteditable="true" spellcheck="true" data-placeholder="Untitled"></h1>
+        <div id="editor" class="editor"></div>
+      </article>
+      <div id="empty-state" class="empty-state" hidden>
+        <p>No page selected.</p>
+        <button id="empty-new-page" class="btn">Create your first page</button>
+      </div>
+    </main>
+  </div>
+
+  <!-- Slash menu (positioned by editor.js) -->
+  <div id="slash-menu" class="slash-menu" hidden></div>
+  <!-- Column menu for table blocks (positioned by table.js) -->
+  <div id="col-menu" class="col-menu" hidden></div>
+
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="sync.js"></script>
+  <script src="table.js"></script>
+  <script src="editor.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
