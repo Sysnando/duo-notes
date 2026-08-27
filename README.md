@@ -17,43 +17,104 @@ python3 -m http.server 8000   # then open http://localhost:8000
 With an empty `config.js` the app runs in **local-only mode**: no login, data
 persisted in `localStorage` only. That is enough to try everything except sync.
 
-## Enable sync (one-time Supabase setup)
+## Backend (already provisioned)
 
-1. Create a free project at supabase.com.
-2. SQL editor → run:
+The app is wired to a Supabase project (`duo-notes`, eu-west-1, free tier) and
+`config.js` holds its URL and anon key. That key is meant to be public: it grants
+nothing on its own, because access is gated on the `members` allow-list below.
 
-   ```sql
-   create table public.pages (
-     id          uuid primary key default gen_random_uuid(),
-     parent_id   uuid references public.pages(id) on delete cascade,
-     title       text not null default '',
-     blocks      jsonb not null default '[]'::jsonb,
-     sort_order  double precision not null default 0,
-     updated_at  timestamptz not null default now(),
-     updated_by  uuid references auth.users(id),
-     client_id   text
-   );
-   create index pages_parent_idx on public.pages(parent_id);
-   alter table public.pages enable row level security;
-   create policy "authenticated full access" on public.pages
-     for all to authenticated using (true) with check (true);
-   alter publication supabase_realtime add table public.pages;
-   alter table public.pages replica identity full;
-   ```
+### How access is restricted
 
-3. Authentication → Users → add the two accounts (email + password,
-   auto-confirm on).
-4. Authentication → Sign In / Providers → Email → turn **off** "Allow new
-   users to sign up".
-5. Project Settings → API → copy the Project URL and the `anon` key into
-   `config.js`.
+- `public.pages` has RLS on, with a single policy: `for all to authenticated
+  using (public.is_member())`.
+- `public.is_member()` is a `security definer` function that checks the caller's
+  email against `public.members`.
+- `public.members` has RLS on and **no** policies, and `anon`/`authenticated`
+  have no grants on it, so the allow-list cannot be read or edited through the
+  API — only with the database password or the service role key.
+- A `before insert` trigger on `auth.users` caps the project at **two accounts**,
+  so a stray signup can never quietly become a third user.
 
-The anon key is intended to be committed; RLS is what protects the data.
-Never commit the `service_role` key.
+Verified end to end: anonymous reads return nothing; a signed-in account that is
+not on the list reads nothing and gets 403 on writes; an account on the list
+reads and writes normally; a third account is refused.
 
-Note: free Supabase projects pause after about a week of inactivity. If the
-app shows the offline banner and nothing syncs, open the Supabase dashboard
-and hit Restore.
+### Adding or changing who has access
+
+Connect with the pooler connection string (the database password is in
+`~/.duo-notes/db-password.txt` on Felipe's Mac, and in the Supabase dashboard
+under Settings → Database):
+
+```bash
+psql "postgresql://postgres.qnhmpcropfqkorvltpmx:<db-password>@aws-1-eu-west-1.pooler.supabase.com:5432/postgres"
+```
+
+```sql
+-- grant access to an address
+insert into public.members (email, note) values ('her@example.com', 'Wife');
+-- revoke it
+delete from public.members where email = 'her@example.com';
+-- allow a third account (removes the cap)
+drop trigger duo_notes_cap_accounts on auth.users;
+```
+
+An email must be on this list **and** have an account. Accounts are created in
+the dashboard under Authentication → Users → Add user, with "Auto Confirm User"
+ticked.
+
+### Recreating the backend from scratch
+
+If the project is ever deleted, run this in the SQL editor of a new project,
+then paste the new URL and anon key into `config.js`:
+
+```sql
+create table public.pages (
+  id          uuid primary key default gen_random_uuid(),
+  parent_id   uuid references public.pages(id) on delete cascade,
+  title       text not null default '',
+  blocks      jsonb not null default '[]'::jsonb,
+  sort_order  double precision not null default 0,
+  updated_at  timestamptz not null default now(),
+  updated_by  uuid references auth.users(id),
+  client_id   text
+);
+create index pages_parent_idx on public.pages(parent_id);
+alter table public.pages enable row level security;
+alter table public.pages replica identity full;   -- realtime needs the whole row
+alter publication supabase_realtime add table public.pages;
+
+create table public.members (email text primary key, note text, added_at timestamptz not null default now());
+alter table public.members enable row level security;
+revoke all on public.members from anon, authenticated;
+
+create or replace function public.is_member() returns boolean
+  language sql stable security definer set search_path = public as $$
+    select exists (select 1 from public.members m
+                   where lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', '')));
+  $$;
+revoke all on function public.is_member() from anon;
+grant execute on function public.is_member() to authenticated;
+
+create policy "members only" on public.pages for all to authenticated
+  using (public.is_member()) with check (public.is_member());
+
+create or replace function public.cap_accounts() returns trigger
+  language plpgsql security definer set search_path = auth, public as $$
+  begin
+    if (select count(*) from auth.users) >= 2 then
+      raise exception 'Duo Notes is limited to two accounts; remove one first';
+    end if;
+    return new;
+  end $$;
+create trigger duo_notes_cap_accounts before insert on auth.users
+  for each row execute function public.cap_accounts();
+```
+
+Also turn **off** Authentication → Sign In / Providers → Email → "Allow new users
+to sign up". The allow-list makes that belt-and-braces rather than critical.
+
+Note: free Supabase projects pause after about a week of inactivity. If the app
+shows the offline banner and nothing syncs, open the dashboard and hit Restore.
 
 ## Deploy
 
