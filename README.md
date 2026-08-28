@@ -23,10 +23,37 @@ The app is wired to a Supabase project (`duo-notes`, eu-west-1, free tier) and
 `config.js` holds its URL and anon key. That key is meant to be public: it grants
 nothing on its own, because access is gated on the `members` allow-list below.
 
+### Two spaces: shared and private
+
+The sidebar has a **Shared** section both people see and a **Private** section
+each person sees only their own of. Where you create a page decides its space, so
+there is no invisible default; the control next to a page title moves it across.
+
+- `pages.visibility` is `'shared'` or `'private'`, defaulting to private.
+- `pages.owner_id` is stamped from `auth.uid()` by a trigger on insert and frozen
+  on update, so ownership cannot be claimed or reassigned through the API. The
+  client never sends it.
+- The policy is `using (is_member() and (visibility = 'shared' or owner_id =
+  auth.uid()))`, applied as both `USING` and `WITH CHECK`. Using it for the check
+  as well is what makes **only the owner able to un-share**: for anyone else the
+  new row fails the check.
+- `set_page_visibility(root_id, vis)` moves a page and its whole subtree in one
+  transaction, under the caller's own permissions. Doing this as N separate
+  updates from the browser could leave a subtree half-moved, which for privacy is
+  the one failure worth designing out.
+- A page changing space becomes top level there, because its parent may not exist
+  in the other space. The sidebar also treats any page whose parent it cannot see
+  as a root, so a page can never exist while being unreachable.
+- Sub-pages inherit their parent's space, so a tree is never half-shared.
+
+Signed out (local-only mode) there is one person and one space, so the sections
+and the control disappear and it stays a single flat list.
+
 ### How access is restricted
 
 - `public.pages` has RLS on, with a single policy: `for all to authenticated
-  using (public.is_member())`.
+  using (public.is_member() and (visibility = 'shared' or owner_id =
+  auth.uid()))`.
 - `public.is_member()` is a `security definer` function that checks the caller's
   email against `public.members`.
 - `public.members` has RLS on and **no** policies, and `anon`/`authenticated`
@@ -35,9 +62,13 @@ nothing on its own, because access is gated on the `members` allow-list below.
 - A `before insert` trigger on `auth.users` caps the project at **two accounts**,
   so a stray signup can never quietly become a third user.
 
-Verified end to end: anonymous reads return nothing; a signed-in account that is
-not on the list reads nothing and gets 403 on writes; an account on the list
-reads and writes normally; a third account is refused.
+Verified end to end against the live project, with two real accounts: anonymous
+reads return nothing; a signed-in account that is not on the list reads nothing
+and gets 403 on writes; an account on the list reads and writes normally;
+reading the allow-list is denied; a third account is refused; one person cannot
+see or fetch the other's private pages, cannot seize ownership of a shared page,
+and cannot un-share a page they did not write; and cascading a subtree between
+spaces works for the owner and does nothing for anyone else.
 
 ### Adding or changing who has access
 
@@ -76,9 +107,12 @@ create table public.pages (
   sort_order  double precision not null default 0,
   updated_at  timestamptz not null default now(),
   updated_by  uuid references auth.users(id),
-  client_id   text
+  client_id   text,
+  owner_id    uuid references auth.users(id),
+  visibility  text not null default 'private' check (visibility in ('private','shared'))
 );
 create index pages_parent_idx on public.pages(parent_id);
+create index pages_visibility_idx on public.pages(visibility);
 alter table public.pages enable row level security;
 alter table public.pages replica identity full;   -- realtime needs the whole row
 alter publication supabase_realtime add table public.pages;
@@ -95,8 +129,39 @@ create or replace function public.is_member() returns boolean
 revoke all on function public.is_member() from anon;
 grant execute on function public.is_member() to authenticated;
 
-create policy "members only" on public.pages for all to authenticated
-  using (public.is_member()) with check (public.is_member());
+-- Ownership is stamped by the database and immutable, so it cannot be claimed.
+create or replace function public.stamp_owner() returns trigger
+  language plpgsql security definer set search_path = public as $$
+  begin
+    if tg_op = 'INSERT' then new.owner_id := coalesce(auth.uid(), new.owner_id);
+    else new.owner_id := old.owner_id; end if;
+    return new;
+  end $$;
+create trigger pages_stamp_owner before insert or update on public.pages
+  for each row execute function public.stamp_owner();
+
+-- Used as WITH CHECK too: that is what stops anyone but the owner un-sharing.
+create policy "shared or mine" on public.pages for all to authenticated
+  using      (public.is_member() and (visibility = 'shared' or owner_id = auth.uid()))
+  with check (public.is_member() and (visibility = 'shared' or owner_id = auth.uid()));
+
+-- Moves a page and its whole subtree between spaces in one transaction.
+create or replace function public.set_page_visibility(root_id uuid, vis text)
+returns setof uuid language sql volatile security invoker set search_path = public as $$
+  with recursive subtree as (
+    select id from public.pages where id = root_id
+    union all
+    select p.id from public.pages p join subtree s on p.parent_id = s.id
+  )
+  update public.pages p
+     set visibility = vis,
+         parent_id  = case when p.id = root_id then null else p.parent_id end,
+         updated_at = now()
+   where p.id in (select id from subtree) and vis in ('private','shared')
+  returning p.id;
+$$;
+revoke all on function public.set_page_visibility(uuid, text) from anon;
+grant execute on function public.set_page_visibility(uuid, text) to authenticated;
 
 create or replace function public.cap_accounts() returns trigger
   language plpgsql security definer set search_path = auth, public as $$

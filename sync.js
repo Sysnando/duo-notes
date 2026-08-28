@@ -33,12 +33,15 @@
 
   // ---------- row mapping ----------
 
+  // owner_id is deliberately not sent: a database trigger stamps it on insert
+  // and freezes it on update, so ownership cannot be claimed from the client.
   const toRow = (p) => ({
     id: p.id,
     parent_id: p.parentId || null,
     title: p.title || '',
     blocks: p.blocks || [],
     sort_order: p.sortOrder || 0,
+    visibility: p.visibility === 'shared' ? 'shared' : 'private',
     updated_at: p.updatedAt || new Date().toISOString(),
     updated_by: user ? user.id : null,
     client_id: clientId
@@ -50,8 +53,38 @@
     title: r.title || '',
     blocks: r.blocks || [],
     sortOrder: r.sort_order || 0,
+    visibility: r.visibility === 'shared' ? 'shared' : 'private',
+    ownerId: r.owner_id || null,
     updatedAt: r.updated_at
   });
+
+  Sync.userId = () => (user ? user.id : null);
+  Sync.userEmail = () => (user ? user.email : '');
+  Sync.isSignedIn = () => !!user;
+
+  // Belt and braces behind RLS: never apply a row we should not be able to see.
+  function visibleToMe(row) {
+    if (!row) return false;
+    if (row.visibility === 'shared') return true;
+    return !!user && row.owner_id === user.id;
+  }
+
+  // Move a page and its whole subtree between the shared and private spaces.
+  // Done in one database call so a subtree can never end up half-moved.
+  Sync.setVisibility = async function (pageId, visibility) {
+    if (!enabled || !user) {
+      const page = App.state.pages[pageId];
+      if (page) page.visibility = visibility;
+      return { ok: true, local: true };
+    }
+    const { error } = await client.rpc('set_page_visibility', { root_id: pageId, vis: visibility });
+    if (error) {
+      console.warn('set visibility failed', error);
+      return { ok: false, error };
+    }
+    await refetchAll();
+    return { ok: true };
+  };
 
   // ---------- push ----------
 
@@ -218,6 +251,16 @@
 
     const row = payload.new;
     if (!row || row.client_id === clientId) return; // self-echo
+    if (row.visibility !== undefined && !visibleToMe(row)) {
+      // Not ours to see. If we had it cached, it has just been made private.
+      if (App.state.pages[row.id]) {
+        delete App.state.pages[row.id];
+        if (App.state.currentPageId === row.id) App.state.currentPageId = null;
+        App.saveLocal();
+        App.render();
+      }
+      return;
+    }
     if (row.blocks === undefined || row.blocks === null) { fetchOne(row.id); return; } // oversized payload
 
     const local = App.state.pages[row.id];

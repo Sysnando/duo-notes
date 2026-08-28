@@ -207,7 +207,49 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .tree-row:hover .tree-action { opacity: 1; }
 .tree-action:hover { background: rgba(43, 38, 32, 0.08); color: var(--accent); }
 
-.tree-empty { color: var(--ink-faint); font-style: italic; padding: 0.5rem 0.75rem; }
+.tree-empty { color: var(--ink-faint); font-style: italic; padding: 0.4rem 0.75rem; font-size: 0.85rem; }
+
+.tree-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 0.45rem 0.2rem 0.6rem;
+}
+
+.tree-section:first-child { padding-top: 0.2rem; }
+
+.tree-section-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+
+.tree-section .icon-btn { width: 1.4rem; height: 1.4rem; font-size: 0.85rem; opacity: 0; }
+.tree-section:hover .icon-btn { opacity: 1; }
+
+/* ---------- shared / private control ---------- */
+
+.page-meta { margin-bottom: 0.6rem; }
+
+.vis-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  transition: color 0.14s ease, border-color 0.14s ease;
+}
+
+.vis-pill:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.vis-pill.shared { color: #4a7a52; }
+.vis-pill.shared:hover:not(:disabled) { color: var(--accent); }
+.vis-pill:disabled { opacity: 0.6; cursor: default; }
 
 .sidebar-foot {
   border-top: 1px solid var(--line);
