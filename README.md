@@ -59,13 +59,15 @@ and the control disappear and it stays a single flat list.
 - `public.members` has RLS on and **no** policies, and `anon`/`authenticated`
   have no grants on it, so the allow-list cannot be read or edited through the
   API — only with the database password or the service role key.
-- A `before insert` trigger on `auth.users` caps the project at **two accounts**,
-  so a stray signup can never quietly become a third user.
+- A `before insert` trigger on `auth.users` refuses any account whose address is
+  not on the allow-list, so a stray signup cannot create an account at all —
+  even if public signup is left enabled in the dashboard. Add the address to
+  `members` first, then create the account.
 
 Verified end to end against the live project, with two real accounts: anonymous
 reads return nothing; a signed-in account that is not on the list reads nothing
 and gets 403 on writes; an account on the list reads and writes normally;
-reading the allow-list is denied; a third account is refused; one person cannot
+reading the allow-list is denied; an account for an uninvited address is refused outright; one person cannot
 see or fetch the other's private pages, cannot seize ownership of a shared page,
 and cannot un-share a page they did not write; and cascading a subtree between
 spaces works for the owner and does nothing for anyone else.
@@ -85,8 +87,7 @@ psql "postgresql://postgres.qnhmpcropfqkorvltpmx:<db-password>@aws-1-eu-west-1.p
 insert into public.members (email, note) values ('her@example.com', 'Wife');
 -- revoke it
 delete from public.members where email = 'her@example.com';
--- allow a third account (removes the cap)
-drop trigger duo_notes_cap_accounts on auth.users;
+-- inviting a third person is just this insert; no trigger to drop
 ```
 
 An email must be on this list **and** have an account. Accounts are created in
@@ -163,20 +164,22 @@ $$;
 revoke all on function public.set_page_visibility(uuid, text) from anon;
 grant execute on function public.set_page_visibility(uuid, text) to authenticated;
 
-create or replace function public.cap_accounts() returns trigger
+-- Only invited addresses may have accounts.
+create or replace function public.gate_signups() returns trigger
   language plpgsql security definer set search_path = auth, public as $$
   begin
-    if (select count(*) from auth.users) >= 2 then
-      raise exception 'Duo Notes is limited to two accounts; remove one first';
+    if not exists (select 1 from public.members m where lower(m.email) = lower(new.email)) then
+      raise exception 'duo-notes: % is not an invited address', new.email;
     end if;
     return new;
   end $$;
-create trigger duo_notes_cap_accounts before insert on auth.users
-  for each row execute function public.cap_accounts();
+create trigger duo_notes_gate_signups before insert on auth.users
+  for each row execute function public.gate_signups();
 ```
 
-Also turn **off** Authentication → Sign In / Providers → Email → "Allow new users
-to sign up". The allow-list makes that belt-and-braces rather than critical.
+Turning off Authentication → Sign In / Providers → Email → "Allow new users to
+sign up" is still tidy, but no longer load-bearing: the gate trigger means an
+uninvited address cannot get an account whether signup is on or off.
 
 Note: free Supabase projects pause after about a week of inactivity. If the app
 shows the offline banner and nothing syncs, open the dashboard and hit Restore.
